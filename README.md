@@ -1,41 +1,38 @@
 # Vault Secrets Demo
 
-A HashiCorp Vault lab demonstrating centralized secrets management, replacing hardcoded credentials and .env files with a proper secrets store and scoped access.
+Local learning lab: Vault KV v2 stores a secret, a Python client retrieves it using a scoped token, and a policy limits reads to one path. Requires Docker Compose and Python 3 with venv support.
 
-## Architecture
+## Start and prepare Python
 
-- Vault running in dev mode (in-memory, auto-unsealed — production would use a persistent storage backend and manual unseal)
-- KV v2 secrets engine storing application secrets
-- A Python client reading secrets via the Vault HTTP API instead of environment variables or hardcoded values
-- A least-privilege policy restricting access to a single secret path
-
-## What it shows
-
-- Storing and retrieving secrets via `vault kv put` / `vault kv get`
-- Reading secrets programmatically through the Vault API
-- Writing a scoped Vault policy (`read-only-policy.hcl`) instead of using the root token everywhere
-- Verifying the policy actually restricts access — a scoped token can read the intended secret but is denied on unrelated operations (`403 permission denied`)
-
-## Motivation
-
-Built after a real incident where a Telegram bot token was accidentally committed to a public GitHub repository and flagged by GitHub's secret scanning. This lab demonstrates the alternative: secrets pulled from a dedicated store at runtime, never stored in code or version control.
-
-## Stack
-
-Docker Compose, HashiCorp Vault, Python
-
-## Usage
-
-\`\`\`bash
+```bash
 docker compose up -d
-\`\`\`
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r app/requirements.txt
+export VAULT_ADDR=http://127.0.0.1:8200
+```
 
-Store a secret:
-\`\`\`bash
-docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=dev-root-token <container> vault kv put secret/telegram-bot token="..."
-\`\`\`
+Vault uses dev mode with the public, disposable `dev-root-token` bootstrap token. Data lives in memory and is lost when Vault restarts. The host port is bound only to loopback. Never put real credentials into this demo.
 
-Read it via the app:
-\`\`\`bash
-VAULT_TOKEN="<scoped-token>" VAULT_ADDR="http://127.0.0.1:8200" python3 app/read_secret.py
-\`\`\`
+## Store a dummy secret and install the policy
+
+```bash
+docker compose exec -T -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=dev-root-token vault vault kv put secret/telegram-bot token=demo-placeholder
+docker compose exec -T -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=dev-root-token vault vault policy write app-read - < read-only-policy.hcl
+export VAULT_TOKEN="$(docker compose exec -T -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=dev-root-token vault vault token create -policy=app-read -no-default-policy -ttl=15m -field=token)"
+python app/read_secret.py
+```
+
+Expected: `Secret retrieved successfully; value is not logged.` The client has a request timeout and never prints the secret or HTTP response body.
+
+## Verify restricted access
+
+```bash
+# Only print HTTP status codes, not secret values. Expect 200, then 403.
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/secret/data/telegram-bot"
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/secret/data/unrelated"
+unset VAULT_TOKEN
+docker compose down
+```
+
+A production setup additionally needs durable storage, TLS, an appropriate unseal mechanism, audit logs and workload authentication with token lifecycle management. Environment variables are used here to bootstrap client authentication; Vault does not remove that bootstrap problem.

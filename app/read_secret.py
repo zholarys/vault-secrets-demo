@@ -10,10 +10,8 @@ if not VAULT_TOKEN:
 url = f"{VAULT_ADDR}/v1/secret/data/telegram-bot"
 headers = {"X-Vault-Token": VAULT_TOKEN}
 
-response = requests.get(url, headers=headers)
-if not response.ok:
-    print("ERROR BODY:", response.text)
+response = requests.get(url, headers=headers, timeout=10)
 response.raise_for_status()
 
 token = response.json()["data"]["data"]["token"]
-print(f"Retrieved secret from Vault (not logging full value): {token[:6]}...")
+print("Secret retrieved successfully; value is not logged.")
